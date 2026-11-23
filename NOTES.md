@@ -18,3 +18,14 @@
   Trump quote Feb 2026, Brown shooting 21 Nov, France match 21 Nov).
 - Status: built, tests green, kit check green (see below). NOT
   submitted — awaiting Joni's 'Setuju' on the exact entry.
+- Build result (23 Nov ~10:00 WIB): commit fc587ef (pushed, master),
+  entry.png 1024x1024, 483,790 bytes, sha256
+  5327cd56d1491fb766e1c2b98da50d8a013e25b2bc57421df166930f15447e00.
+  Tests: 3/3 pass. uid-65534 read-only run: exit 0, byte-identical
+  output, mode 644. Kit check: only failure is transcripts_present
+  (no --transcripts given — bundle is the parent's step); all other
+  checks pass/skip or are submission-time site reads.
+- Visual fixes (2 rounds): DATE CHECK overlap fixed; vote-tile
+  overlay removed; plane tile lowered; Dymer text un-overlapped;
+  NO DEAL stamp centred. 300px preview: masthead + 3 leads legible.
+- known-bounties.json already lists news-image-20261122.
