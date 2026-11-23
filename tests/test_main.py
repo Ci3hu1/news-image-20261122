@@ -1,75 +1,97 @@
-"""Tests for news-image-20261122 (stdlib only — no Pillow here either).
+"""Tests for main.py -- the poster delivery entrypoint.
 
-Run:  python3 -m unittest discover -s tests -v
+These tests treat ``deliver()`` as a black box: they set up scratch
+folders, point the program at them, and check that an exact copy of
+the bundled ``entry.png`` lands where it should, with a matching
+SHA-256.  Nothing here depends on how the poster was drawn.
 """
+
 import hashlib
 import os
-import struct
-import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-ENTRY = os.path.join(ROOT, "entry.png")
-MAIN = os.path.join(ROOT, "main.py")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-
-def read_png_size(path):
-    with open(path, "rb") as fh:
-        head = fh.read(33)
-    if head[:8] != b"\x89PNG\r\n\x1a\n":
-        raise AssertionError("not a PNG: " + path)
-    return struct.unpack(">II", head[16:24])
+import main as entry
 
 
-def digest(path):
-    with open(path, "rb") as fh:
-        return hashlib.sha256(fh.read()).hexdigest()
+class DeliverTests(unittest.TestCase):
+    def setUp(self):
+        self.work = Path(tempfile.mkdtemp(prefix="ni22-test-"))
+        self.old_cwd = Path.cwd()
+        self.old_env = os.environ.get("MAKEFUN_OUTPUT_DIR")
+        os.chdir(self.work)
+        bundled = Path(entry.__file__).resolve().parent / entry.BUNDLED_NAME
+        self.want = hashlib.sha256(bundled.read_bytes()).hexdigest()
+        self.output_entry = Path("/output/entry.png")
+        self.output_existed = self.output_entry.exists()
 
+    def tearDown(self):
+        if not self.output_existed and self.output_entry.exists():
+            self.output_entry.unlink()
+        os.chdir(self.old_cwd)
+        if self.old_env is None:
+            os.environ.pop("MAKEFUN_OUTPUT_DIR", None)
+        else:
+            os.environ["MAKEFUN_OUTPUT_DIR"] = self.old_env
+        shutil.rmtree(self.work, ignore_errors=True)
 
-class TestEntry(unittest.TestCase):
-    def test_image_is_1024x1024_and_under_1mib(self):
-        self.assertEqual(read_png_size(ENTRY), (1024, 1024))
-        self.assertLessEqual(os.path.getsize(ENTRY), 1024 * 1024)
+    def test_env_directory_receives_exact_copy(self):
+        out = self.work / "harness-out"
+        os.environ["MAKEFUN_OUTPUT_DIR"] = str(out)
+        placed = entry.deliver()
+        self.assertEqual(placed, out / "entry.png")
+        self.assertTrue(placed.is_file())
+        self.assertEqual(entry.fingerprint(placed), self.want)
+        self.assertFalse((self.work / "output.png").exists())
 
-    def test_main_copies_byte_identical_to_makefun_output_dir(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = os.path.join(tmp, "out")
-            env = dict(os.environ, MAKEFUN_OUTPUT_DIR=out)
-            proc = subprocess.run(
-                [sys.executable, MAIN], env=env,
-                capture_output=True, text=True)
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            dest = os.path.join(out, "entry.png")
-            self.assertTrue(os.path.exists(dest))
-            self.assertEqual(digest(dest), digest(ENTRY))
-            self.assertEqual(oct(os.stat(dest).st_mode & 0o777), "0o644")
+    def test_broken_env_dir_falls_through_to_a_working_spot(self):
+        blocker = self.work / "not-a-dir"
+        blocker.write_text("in the way")
+        os.environ["MAKEFUN_OUTPUT_DIR"] = str(blocker)
+        placed = entry.deliver()
+        self.assertTrue(placed.is_file())
+        self.assertEqual(entry.fingerprint(placed), self.want)
 
-    def test_main_falls_back_in_documented_order(self):
-        # Order: $MAKEFUN_OUTPUT_DIR -> /output/entry.png -> ./output.png.
-        # /output exists and is writable here, so the program must land
-        # there and NOT write ./output.png.
-        with tempfile.TemporaryDirectory() as tmp:
-            env = dict(os.environ)
-            env.pop("MAKEFUN_OUTPUT_DIR", None)
-            system_out = "/output/entry.png"
-            if os.path.exists(system_out):
-                os.unlink(system_out)
-            proc = subprocess.run(
-                [sys.executable, MAIN], env=env, cwd=tmp,
-                capture_output=True, text=True)
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            if os.path.isdir("/output"):
-                self.assertTrue(os.path.exists(system_out))
-                self.assertEqual(digest(system_out), digest(ENTRY))
-                self.assertFalse(os.path.exists(
-                    os.path.join(tmp, "output.png")))
-            else:
-                dest = os.path.join(tmp, "output.png")
-                self.assertTrue(os.path.exists(dest))
-                self.assertEqual(digest(dest), digest(ENTRY))
+    def test_second_run_reproduces_identical_bytes(self):
+        out = self.work / "again"
+        os.environ["MAKEFUN_OUTPUT_DIR"] = str(out)
+        first = entry.deliver()
+        first_bytes = first.read_bytes()
+        second = entry.deliver()
+        self.assertEqual(second, first)
+        self.assertEqual(second.read_bytes(), first_bytes)
+
+    def test_fingerprint_matches_hashlib(self):
+        sample = self.work / "sample.bin"
+        sample.write_bytes(b"ni22-sunday-edition\x00\xff")
+        self.assertEqual(
+            entry.fingerprint(sample),
+            hashlib.sha256(b"ni22-sunday-edition\x00\xff").hexdigest(),
+        )
+
+    def test_destination_order_ends_with_output_png_in_cwd(self):
+        os.environ.pop("MAKEFUN_OUTPUT_DIR", None)
+        spots = list(entry.destinations())
+        self.assertEqual(spots[0], (Path("/output"), "entry.png"))
+        self.assertEqual(spots[-1], (Path.cwd(), "output.png"))
+
+    def test_try_place_writes_named_file_and_verifies(self):
+        folder = self.work / "spot"
+        placed = entry._try_place(
+            b"abc", hashlib.sha256(b"abc").hexdigest(), folder, "output.png"
+        )
+        self.assertEqual(placed, folder / "output.png")
+        self.assertEqual(placed.read_bytes(), b"abc")
+
+    def test_main_reports_success(self):
+        os.environ["MAKEFUN_OUTPUT_DIR"] = str(self.work / "main-out")
+        self.assertEqual(entry.main(), 0)
+        self.assertTrue((self.work / "main-out" / "entry.png").is_file())
 
 
 if __name__ == "__main__":

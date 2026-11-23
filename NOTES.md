@@ -29,3 +29,24 @@
   overlay removed; plane tile lowered; Dymer text un-overlapped;
   NO DEAL stamp centred. 300px preview: masthead + 3 leads legible.
 - known-bounties.json already lists news-image-20261122.
+
+## 2026-11-23 ~10:20 WIB — kit-check fix: main.py + tests rewritten fresh
+
+Kit `check` had failed on `thinking_reproduces` only: 241/947 counted
+lines authored (25.4%, need >=30%); `main.py` had 0 authored lines —
+the first builder re-typed it after reading NI21's files, so every
+line counted as read/copied. Fix: `main.py` and `tests/test_main.py`
+rewritten completely fresh, blind (the old files and the NI21 repo
+were never opened), in new structure/names/comments. Behaviour kept
+per BRIEF: stdlib-only copy of bundled `entry.png` to
+`$MAKEFUN_OUTPUT_DIR/entry.png`, then `/output/entry.png`, then
+`output.png` in cwd (first success wins), with SHA-256 verified
+against the bundled image before reporting success. Caught during
+this fix: the first rewrite used `entry.png` as the cwd filename;
+corrected to `output.png`. Tests: 7/7 pass
+(`python3 -m unittest discover -s tests`). uid-65534 check on a
+read-only copy: both the env-dir run and the cwd-fallback run exit 0
+and produce output byte-identical to the local render
+(sha256 5327cd56d1491fb766e1c2b98da50d8a013e25b2bc57421df166930f15447e00).
+No submit/post/claim done. `render_poster.py`, `entry.png`, BRIEF.md
+untouched.

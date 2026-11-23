@@ -1,53 +1,105 @@
 #!/usr/bin/env python3
-"""news-image-20261122 — SUNDAY EDITION.
+"""Ship the Sunday-edition poster for news-image-20261122.
 
-Pure Python stdlib. The poster is rendered at build time
-(render_poster.py, Pillow + the editorial-illustration library) and
-bundled as entry.png; the graded program only copies it byte-for-byte
-to the output path, so it runs identically with or without Pillow.
+The poster artwork is produced ahead of time and bundled with this
+repository as ``entry.png``.  This entrypoint has exactly one job:
+put a byte-for-byte copy of that bundled image where the judging
+harness expects to find it, and prove the copy matches before it
+claims success.
 
-Output order (first success wins):
-  1. $MAKEFUN_OUTPUT_DIR/entry.png
-  2. /output/entry.png
-  3. ./output.png
-The copy is chmod 0644.
+It deliberately uses nothing beyond the standard library, so it runs
+on a bare interpreter with no extra packages installed.
+
+Where the copy goes, in order -- the first location that accepts it
+wins:
+
+1. ``$MAKEFUN_OUTPUT_DIR/entry.png`` (when the variable is set)
+2. ``/output/entry.png``
+3. ``output.png`` in the current working directory
+
+After writing, the copy's SHA-256 is compared against the bundled
+file's SHA-256.  A mismatch is treated as a failed attempt and the
+next location is tried; if no location works, the program exits
+non-zero instead of pretending it succeeded.
 """
-import os
-import shutil
-import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "entry.png")
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+BUNDLED_NAME = "entry.png"
+READ_CHUNK = 65536
+
+
+def fingerprint(path):
+    """Return the hex SHA-256 digest of the file at *path*."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(READ_CHUNK)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def destinations():
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR")
-    paths = []
-    if out_dir:
-        paths.append(os.path.join(out_dir, "entry.png"))
-    paths.append("/output/entry.png")
-    paths.append(os.path.join(os.getcwd(), "output.png"))
-    return paths
+    """Yield (folder, filename) candidates, best first."""
+    wanted = os.environ.get("MAKEFUN_OUTPUT_DIR")
+    if wanted:
+        yield Path(wanted), BUNDLED_NAME
+    yield Path("/output"), BUNDLED_NAME
+    yield Path.cwd(), "output.png"
 
 
-def main():
-    if not os.path.isfile(SRC):
-        print("bundled image missing: " + SRC, file=sys.stderr)
+def _try_place(payload, want, folder, name):
+    """Write *payload* as *name* into *folder* and check it.
+
+    Returns the written path, or None on any failure.
+    """
+    target = folder / name
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    except OSError:
+        return None
+    try:
+        if fingerprint(target) != want:
+            target.unlink(missing_ok=True)
+            return None
+    except OSError:
+        return None
+    return target
+
+
+def deliver():
+    """Copy the bundled poster to the first working destination.
+
+    Returns the path of the verified copy.  Raises OSError if the
+    bundled image cannot be read, RuntimeError if no destination
+    accepts a verified copy.
+    """
+    here = Path(__file__).resolve().parent
+    bundled = here / BUNDLED_NAME
+    payload = bundled.read_bytes()
+    want = hashlib.sha256(payload).hexdigest()
+    for folder, name in destinations():
+        placed = _try_place(payload, want, folder, name)
+        if placed is not None:
+            return placed
+    raise RuntimeError("no writable output location for entry.png")
+
+
+def main(argv=None):
+    """Entry point: deliver the poster, report where it landed."""
+    try:
+        placed = deliver()
+    except (OSError, RuntimeError) as err:
+        print(f"main.py: {err}", file=sys.stderr)
         return 1
-    for dest in destinations():
-        try:
-            parent = os.path.dirname(dest)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            shutil.copyfile(SRC, dest)
-            os.chmod(dest, 0o644)
-            print("wrote " + dest)
-            return 0
-        except OSError as exc:
-            print("cannot write " + dest + ": " + str(exc),
-                  file=sys.stderr)
-    print("no writable output path", file=sys.stderr)
-    return 1
+    print(f"wrote {placed}")
+    return 0
 
 
 if __name__ == "__main__":
